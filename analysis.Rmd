@@ -1,0 +1,303 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library('FSelector')
+require('caret')
+library('hydroGOF')
+```
+
+```{r}
+train = read.csv('train.csv')
+train$SalePrice = log(train$SalePrice)
+hist(train$SalePrice)
+```
+
+```{r}
+sort(colSums(is.na(train))/nrow(train))
+
+```
+
+```{r}
+  replaceNA <- function(x, val){
+    if(sum(is.na(x)) == 0) return(x)
+    
+    x = factor(x, levels=c(levels(x), val))
+    x[is.na(x)] <- val
+    return(x)
+  }
+  
+  prepare <- function(data){
+    #data$Id <- NULL
+    # data$HasGarage <- !is.na(data$GarageType)
+    # data$Remodeled <- as.logical(data$YearBuilt == data$YearRemodAdd)
+    # data$NumBaths <- data$BsmtFullBath+data$BsmtHalfBath+data$FullBath+data$HalfBath
+    data$PoolQC <- NULL
+    data$Alley <- NULL
+    data$Fence <- NULL
+    data$LotFrontage <- NULL
+    data$FireplaceQu <- NULL
+    data$MiscFeature <- NULL
+    
+    
+    data$MasVnrType[is.na(data$MasVnrType)] <- 'None'
+    data$MasVnrArea[is.na(data$MasVnrArea)] <- 0
+    
+    
+    for(c in colnames(data)){
+      if(is.factor(data[[c]])){
+        data[[c]] <- replaceNA(data[[c]], 'NA')    
+      }else{
+        data[[c]][is.na(data[[c]])] <- mean(data[[c]], na.rm = TRUE)
+      }
+    }
+  
+    # 
+    # data$GrLivArea <- log(data$GrLivArea)
+    # data$LotArea <- log(data$LotArea)
+    
+    # data$FlrSF <- data$X1stFlrSF + data$X2ndFlrSF + data$TotalBsmtSF
+    # 
+    # data$GarageYrBlt[is.na(data$GarageYrBlt)] <- data$YearBuilt[is.na(data$GarageYrBlt)]
+    # 
+    # 
+    # 
+    # data$GrLivArea <- NULL
+    # data$BsmtFullBath <- NULL
+    # data$BsmtHalfBath <- NULL
+    # data$FullBath <- NULL
+    # data$HalfBath <- NULL
+    
+    # data$Street <- NULL
+     data$Utilities <- NULL
+    # data$Condition2 <- NULL
+    # data$RoofMatl <- NULL
+    return(data)
+  }
+
+```
+
+
+```{r}
+train <- prepare(train)
+```
+
+
+```{r}
+# for( var in rownames(attr_import)){
+#   if( !is.factor(train[[var]]))
+#     plot(log(train[[var]]), train$SalePrice, xlab=var)
+#   
+# }
+
+```
+
+```{r}
+# for( var in rownames(attr_import)){
+#   if( !is.factor(train[[var]])){
+#     hist(train[[var]], xlab=var)
+#     }
+# }
+```
+
+```{r}
+
+set.seed(5644)
+trainIndex <- createDataPartition(train$SalePrice, p = .70, list = FALSE, times = 1)
+data_train <- train[ trainIndex,]
+data_test <- train[-trainIndex,]
+
+cv = 5
+
+trainIndex <- createFolds(train$SalePrice, k=cv)
+cv_train <- list()
+cv_test <- list()
+for( i in 1:cv){
+  cv_train[[length(cv_train)+1]]<- train[-trainIndex[[paste(c('Fold',i), collapse = "")]],] 
+  cv_test[[length(cv_test)+1]] <- train[trainIndex[[paste(c('Fold',i), collapse = "")]],]
+}
+ 
+
+```
+
+Usamos la funcion step para determinar las variables a usar, pero el modelo generado tiene mucho overtiffting
+
+```{r}
+# empty_fit <- lm(SalePrice~1, data = data_train)
+# scope <- as.formula(paste("~", paste(colnames(data_train)[!colnames(data_train) %in% c('SalePrice', 'Id')], collapse = "+")))
+# sf <- step(empty_fit, direction="both", trace = 0,scope = scope, metric = "RMSE")
+# 
+# 
+#  for( col in names(sf$xlevels)) {
+#    if( is.factor(data_test[[col]])){
+#      sf$xlevels[[col]] <- levels(data_test[[col]])
+#    }
+#  }
+# 
+# rmse(data_test$SalePrice, predict(sf, data_test))
+```
+
+
+```{r}
+if(FALSE){
+  attr_import = symmetrical.uncertainty(formula = SalePrice~., data = train)
+  attr_import = attr_import[order(-attr_import$attr_importance), drop=FALSE]
+  attr_import
+  
+  lerr <- c()
+  for(i in 1:nrow(attr_import)){
+    fit <- lm(paste("SalePrice~", paste(rownames(attr_import)[1:i], collapse = "+")), data = data_train)
+    
+    for( col in names(fit$xlevels)) {
+      if( is.factor(data_test[[col]])){
+        fit$xlevels[[col]] <- levels(data_test[[col]])
+      }
+    }
+    
+    erc = rmse(predict(fit, data_test), data_test$SalePrice)
+    
+    lerr <- append(lerr, erc)
+    
+  }
+  
+  plot(log(lerr))
+}
+
+```
+
+
+```{r}
+if(FALSE){
+  vars <- colnames(cv_train[[1]])[!colnames(cv_train[[1]]) %in% c('SalePrice', 'Id')]
+  df_err <- data.frame(vars=character(), ecm = double())
+  selected_vars <- list( )
+  
+  while( length(vars) > 0){
+    min_erc <- 1/0
+    eam <- 1/0
+    s_var <- ''
+    for( var in vars){
+      formula <- as.formula(paste("SalePrice~", paste(union(selected_vars, var), collapse = "+")))
+      
+      erc <- 0
+      for(rep in 1:cv){
+        fit <- lm(formula, data = cv_train[[rep]])
+        
+        for( col in names(fit$xlevels)) {
+          if( is.factor(cv_test[[rep]][[col]])){
+            fit$xlevels[[col]] <- levels(cv_test[[rep]][[col]])
+          }
+        }
+        
+        prediction <- predict(fit, cv_test[[rep]])
+        erc = erc + rmse(prediction, cv_test[[rep]]$SalePrice)
+      }
+      
+      if( min_erc > erc){
+        min_erc <- erc
+        s_var <- var
+      }
+    }
+    
+    selected_vars[[length(selected_vars)+1]] <- s_var
+    
+    df_err <- rbind(df_err, data.frame(vars = paste(selected_vars,collapse = "+"), ecm = min_erc))
+    
+    vars <- vars[vars != s_var]
+  }
+}
+plot(log(df_err$ecm))
+```
+
+```{r}
+
+```
+
+0.1689364
+0.1375193
+```{r}
+df_err[order(df_err$ecm),]$ecm[1]/5
+```
+
+
+
+```{r}
+vars = df_err[order(df_err$ecm),]$vars[1]
+formula <- as.formula(paste("SalePrice~", vars, collapse = ""))
+fit <- lm(formula, data = train)
+
+plot(train$SalePrice, predict(fit, train))
+
+```
+
+
+```{r}
+test = prepare(read.csv('test.csv'))
+
+mszoning_fit<- train(MSZoning~Neighborhood, data = train)
+test[(test$MSZoning == 'NA'),]$MSZoning = predict(mszoning_fit, test[(test$MSZoning == 'NA'),])
+
+# for( col in names(fit$xlevels)) {
+#   if( is.factor(test[[col]])){
+#     print(fit$xlevels[[col]])
+#     print(levels(test[[col]]))
+#   }
+# }
+
+# #tmp<-fit$xlevels[['MSZoning']]
+# fit$xlevels[['MSZoning']] <- tmp
+#fit$xlevels[['MSZoning']] <- union(fit$xlevels[["MSZoning"]], levels(test$MSZoning))
+
+test$prediction <- exp(predict(fit, test))
+
+export = data.frame(Id=test$Id, SalePrice=test$prediction)
+
+print(sum(is.na(export$SalePrice)))
+print(mean(export$SalePrice))
+write.csv(export, file = "tosubmit.csv", row.names = FALSE)
+```
+
+
+```{r}
+fit <- lm(SalePrice ~ ., data = train)
+options(max.print=5.5E5)
+
+test = read.csv('test.csv')
+test$PoolQC <- replaceNA(test$PoolQC, 'No')
+test$Fence <- replaceNA(test$Fence, 'No')
+test$HasGarage <- !is.na(test$GarageType)
+test$Remodeled <- test$YearBuilt == test$YearRemodAdd
+
+#test$MSZoning[!(test$MSZoning %in% levels(train$MSZoning))] <- NA
+
+df <- data.frame(predict(fit, test))
+colnames(df) <- c('Id','SalePrice')
+df$SalesPrice = exp(df$SalesPrice)
+write.csv(, file = "tosubmit.csv")
+```
+
+
+```{r}
+ trc <- trainControl(
+  method = "cv",
+  number = 5
+)
+
+# fit_svm <- train( formula, data = data_train, 'svmLinear', trControl = trc, seed=6456, trace = FALSE, verbose = FALSE, metric = "RMSE")
+rmse(data_test$SalePrice, predict(fit_svm, data_test))
+
+
+dmy <- dummyVars(" ~ .", data = train, fullRank=T)
+trsf <- data.frame(predict(dmy, newdata = data_train))
+
+
+fit_lasso <- train( SalePrice~., data = trsf, method='lasso', trControl = trc, trace = FALSE,  metric = "RMSE",
+                           preProc = c("center", "scale"))
+
+rmse(data_test$SalePrice, predict(fit_lasso, data_test))
+```
+
