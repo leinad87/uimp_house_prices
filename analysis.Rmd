@@ -33,9 +33,11 @@ sort(colSums(is.na(train))/nrow(train))
   
   prepare <- function(data){
     #data$Id <- NULL
-    # data$HasGarage <- !is.na(data$GarageType)
-    # data$Remodeled <- as.logical(data$YearBuilt == data$YearRemodAdd)
-    # data$NumBaths <- data$BsmtFullBath+data$BsmtHalfBath+data$FullBath+data$HalfBath
+    data$HasGarage <- !is.na(data$GarageType)
+    data$Remodeled <- as.logical(data$YearBuilt == data$YearRemodAdd)
+    data$NumBaths <- data$BsmtFullBath+data$BsmtHalfBath+data$FullBath+data$HalfBath
+    data$years_since_remod <- data$YrSold - data$YearRemodAdd
+    
     data$PoolQC <- NULL
     data$Alley <- NULL
     data$Fence <- NULL
@@ -56,13 +58,13 @@ sort(colSums(is.na(train))/nrow(train))
       }
     }
   
-    # 
-    # data$GrLivArea <- log(data$GrLivArea)
-    # data$LotArea <- log(data$LotArea)
+     
+    data$GrLivArea <- log(data$GrLivArea)
+    data$LotArea <- log(data$LotArea)
     
-    # data$FlrSF <- data$X1stFlrSF + data$X2ndFlrSF + data$TotalBsmtSF
-    # 
-    # data$GarageYrBlt[is.na(data$GarageYrBlt)] <- data$YearBuilt[is.na(data$GarageYrBlt)]
+     data$FlrSF <- data$X1stFlrSF + data$X2ndFlrSF + data$TotalBsmtSF
+     
+     data$GarageYrBlt[is.na(data$GarageYrBlt)] <- data$YearBuilt[is.na(data$GarageYrBlt)]
     # 
     # 
     # 
@@ -127,23 +129,22 @@ for( i in 1:cv){
 Usamos la funcion step para determinar las variables a usar, pero el modelo generado tiene mucho overtiffting
 
 ```{r}
-# empty_fit <- lm(SalePrice~1, data = data_train)
-# scope <- as.formula(paste("~", paste(colnames(data_train)[!colnames(data_train) %in% c('SalePrice', 'Id')], collapse = "+")))
-# sf <- step(empty_fit, direction="both", trace = 0,scope = scope, metric = "RMSE")
-# 
-# 
-#  for( col in names(sf$xlevels)) {
-#    if( is.factor(data_test[[col]])){
-#      sf$xlevels[[col]] <- levels(data_test[[col]])
-#    }
-#  }
-# 
-# rmse(data_test$SalePrice, predict(sf, data_test))
+empty_fit <- lm(SalePrice~1, data = data_train)
+scope <- as.formula(paste("~", paste(colnames(data_train)[!colnames(data_train) %in% c('SalePrice', 'Id')], collapse = "+")))
+sf <- step(empty_fit, direction="both", trace = 0,scope = scope, metric = "RMSE")
+
+for( col in names(sf$xlevels)) {
+      if( is.factor(data_test[[col]])){
+        sf$xlevels[[col]] <- levels(data_test[[col]])
+      }
+}
+
+plot(data_test$SalePrice, predict(sf, data_test))
 ```
 
 
 ```{r}
-if(FALSE){
+if(T){
   attr_import = symmetrical.uncertainty(formula = SalePrice~., data = train)
   attr_import = attr_import[order(-attr_import$attr_importance), drop=FALSE]
   attr_import
@@ -262,25 +263,7 @@ write.csv(export, file = "tosubmit.csv", row.names = FALSE)
 ```
 
 
-```{r}
-fit <- lm(SalePrice ~ ., data = train)
-options(max.print=5.5E5)
-
-test = read.csv('test.csv')
-test$PoolQC <- replaceNA(test$PoolQC, 'No')
-test$Fence <- replaceNA(test$Fence, 'No')
-test$HasGarage <- !is.na(test$GarageType)
-test$Remodeled <- test$YearBuilt == test$YearRemodAdd
-
-#test$MSZoning[!(test$MSZoning %in% levels(train$MSZoning))] <- NA
-
-df <- data.frame(predict(fit, test))
-colnames(df) <- c('Id','SalePrice')
-df$SalesPrice = exp(df$SalesPrice)
-write.csv(, file = "tosubmit.csv")
-```
-
-
+#Prueba de dummy vars. Best score: 0.13327
 ```{r}
  trc <- trainControl(
   method = "cv",
@@ -290,14 +273,51 @@ write.csv(, file = "tosubmit.csv")
 # fit_svm <- train( formula, data = data_train, 'svmLinear', trControl = trc, seed=6456, trace = FALSE, verbose = FALSE, metric = "RMSE")
 rmse(data_test$SalePrice, predict(fit_svm, data_test))
 
+train = prepare(read.csv('train.csv'))
+train$SalePrice <- log(train$SalePrice)
+test = prepare(read.csv('test.csv'))
+test$SalePrice <- -1
 
-dmy <- dummyVars(" ~ .", data = train, fullRank=T)
-trsf <- data.frame(predict(dmy, newdata = data_train))
+all_data = rbind(test,train)
+
+dmy <- dummyVars(as.formula(paste("~SalePrice+", vars, collapse = "")), data = all_data)
+train <- data.frame(predict(dmy, newdata = all_data[-(1:nrow(test)),]))
+test_data <- data.frame(predict(dmy, newdata = all_data[(1:nrow(test)),]))
+
+fit_lasso<-NULL
+fit_lasso <- train( SalePrice~., data = train, method='glm', trControl = trc, trace = FALSE,  metric = "RMSE")
+summary(fit_lasso)
+fit_lasso$results$RMSE
 
 
-fit_lasso <- train( SalePrice~., data = trsf, method='lasso', trControl = trc, trace = FALSE,  metric = "RMSE",
-                           preProc = c("center", "scale"))
+test_data$prediction <- exp(predict(fit_lasso, test_data))
 
-rmse(data_test$SalePrice, predict(fit_lasso, data_test))
+export = data.frame(Id=test$Id, SalePrice=test_data$prediction)
+
+print(sum(is.na(export$SalePrice)))
+print(mean(export$SalePrice))
+write.csv(export, file = "tosubmit.csv", row.names = FALSE)
+
+```
+
+```{r}
+#http://stackoverflow.com/a/15887859/710162
+
+library(corrplot)
+#create data with some correlation structure
+jnk=runif(1000)
+jnk=(jnk*100)+c(1:500, 500:1)
+jnk=matrix(jnk,nrow=100,ncol=10)
+jnk=as.data.frame(jnk)
+names(jnk)=c("var1", "var2","var3","var4","var5","var6","var7","var8","var9","var10")
+
+#create correlation matrix
+cor_jnk=cor(jnk, use="complete.obs")
+#plot cor matrix
+corrplot(cor_jnk, order="AOE", method="circle", tl.pos="lt", type="upper",        
+tl.col="black", tl.cex=0.6, tl.srt=45, 
+         addCoef.col="black", addCoefasPercent = TRUE,
+         p.mat = 1-abs(cor_jnk), sig.level=0.50, insig = "blank")  
+
 ```
 
