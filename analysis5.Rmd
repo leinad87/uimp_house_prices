@@ -1,0 +1,156 @@
+---
+title: "Untitled"
+author: "Daniel Argüelles Martino"
+date: "10 de diciembre de 2016"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+require('caret')
+```
+
+
+```{r}
+replaceNA <- function(x, val){
+    if(sum(is.na(x)) == 0) return(x)
+    
+    x = factor(x, levels=c(levels(x), val))
+    x[is.na(x)] <- val
+    return(x)
+  }
+  
+  prepare <- function(data){
+    #data$Id <- NULL
+    data$HasGarage <- !is.na(data$GarageType)
+    data$Remodeled <- as.logical(data$YearBuilt == data$YearRemodAdd)
+    data$NumBaths <- data$BsmtFullBath+data$BsmtHalfBath+data$FullBath+data$HalfBath
+    data$years_since_remod <- data$YrSold - data$YearRemodAdd
+    
+    data$PoolQC <- NULL
+    data$Alley <- NULL
+    data$Fence <- NULL
+    data$LotFrontage <- NULL
+    data$FireplaceQu <- NULL
+    data$MiscFeature <- NULL
+    
+    
+    data$MasVnrType[is.na(data$MasVnrType)] <- 'None'
+    data$MasVnrArea[is.na(data$MasVnrArea)] <- 0
+    
+    
+    for(c in colnames(data)){
+      if(is.factor(data[[c]])){
+        data[[c]] <- replaceNA(data[[c]], 'NA')    
+      }else{
+        data[[c]][is.na(data[[c]])] <- mean(data[[c]], na.rm = TRUE)
+      }
+    }
+  
+     
+    data$GrLivArea <- log(data$GrLivArea)
+    data$LotArea <- log(data$LotArea)
+    
+     data$FlrSF <- data$X1stFlrSF + data$X2ndFlrSF + data$TotalBsmtSF
+     
+     data$GarageYrBlt[is.na(data$GarageYrBlt)] <- data$YearBuilt[is.na(data$GarageYrBlt)]
+    # 
+    # 
+    # 
+    # data$GrLivArea <- NULL
+    # data$BsmtFullBath <- NULL
+    # data$BsmtHalfBath <- NULL
+    # data$FullBath <- NULL
+    # data$HalfBath <- NULL
+    
+    # data$Street <- NULL
+     data$Utilities <- NULL
+    # data$Condition2 <- NULL
+    # data$RoofMatl <- NULL
+    return(data)
+  }
+```
+
+
+
+
+```{r}
+
+train = prepare(read.csv('train.csv'))
+train$SalePrice <- log(train$SalePrice)
+
+test = prepare(read.csv('test.csv'))
+test$SalePrice <- -1
+
+
+all_data = rbind(test,train)
+
+
+```
+
+
+```{r}
+  trc <- trainControl(
+    method = "cv",
+    number = 5,
+    repeats = 1
+  )
+  
+  vars <- colnames(all_data)[!colnames(all_data) %in% c('SalePrice', 'Id')]
+  df_err <- data.frame(vars=character(), ecm = double())
+  selected_vars <- list( )
+  
+  while( length(vars) > 0){
+    min_erc <- 1/0
+    eam <- 1/0
+    s_var <- ''
+    for( var in vars){
+      dmy <- dummyVars(as.formula(paste("~SalePrice+", union(selected_vars, var), collapse = "+")), data = all_data)
+      train <- data.frame(predict(dmy, newdata = all_data[-(1:nrow(test)),]))
+      
+      fit_lasso <- train( SalePrice~., data = train, method='glm', trControl = trc, trace = FALSE,  metric = "RMSE")
+      erc <- fit_lasso$results$RMSE
+      
+      if( min_erc > erc){
+        min_erc <- erc
+        s_var <- var
+      }
+    }
+    
+    selected_vars[[length(selected_vars)+1]] <- s_var
+    
+    df_err <- rbind(df_err, data.frame(vars = paste(selected_vars,collapse = "+"), ecm = min_erc))
+    
+    vars <- vars[vars != s_var]
+  }
+
+plot(log(df_err$ecm))
+
+```
+
+
+
+
+```{r}
+vars = df_err[order(df_err$ecm),]$vars[1]
+dmy <- dummyVars(as.formula(paste("~SalePrice+",paste(vars, collapse = "+"), collapse="+")), data = all_data)
+train <- data.frame(predict(dmy, newdata = all_data[-(1:nrow(test)),]))
+test_data <- data.frame(predict(dmy, newdata = all_data[(1:nrow(test)),]))
+
+
+fit_lasso<-NULL
+fit_lasso <- train( SalePrice~., data = train, method='glm', trControl = trc, trace = FALSE,  metric = "RMSE")
+print(fit_lasso$results$RMSE)
+
+
+test_data$prediction <- exp(predict(fit_lasso, test_data))
+
+export = data.frame(Id=test$Id, SalePrice=test_data$prediction)
+
+write.csv(export, file = "tosubmit.csv", row.names = FALSE)
+```
+
+
